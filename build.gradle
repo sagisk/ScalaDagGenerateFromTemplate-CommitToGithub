@@ -1,0 +1,167 @@
+plugins {
+    id("scala")
+    id("java-library")
+    id('java')
+    id("idea")
+    id("com.github.maiflai.scalatest").version("0.32")
+    id("cz.alenkacz.gradle.scalafmt").version("1.16.2")
+    id('com.github.johnrengelman.shadow').version('8.1.1')
+    id('application')
+    id("com.bmuschko.docker-remote-api").version("9.3.4")
+}
+
+group = 'org.example'
+version = '1.0-SNAPSHOT'
+
+apply {
+    plugin "cz.alenkacz.gradle.scalafmt"
+}
+
+java {
+    sourceCompatibility = "23"
+    targetCompatibility = "23"
+}
+
+idea {
+    module {
+        downloadJavadoc = true
+        downloadSources = true
+        outputDir = file("$buildDir/idea-classes/main")
+        testOutputDir = file("$buildDir/idea-classes/test")
+    }
+}
+
+repositories {
+    jcenter()
+    mavenCentral()
+    mavenLocal()
+    maven {
+        url "https://repo.akka.io/maven"
+    }
+}
+
+
+//scala {
+//    scalaVersion = "3.3.5"
+//}
+
+configurations {
+    testRuntime {
+        // to fix runtime classpath conflicts with pegdown dependencies
+        exclude group: "asm", module: "asm"
+    }
+}
+
+shadowJar {
+    append 'reference.conf'
+    append 'version.conf'
+    zip64 true
+    with jar
+    archiveFileName = "${project.name}.jar"
+}
+
+
+
+jar {
+    archiveBaseName = "${project.name}$scala_suffix"
+    duplicatesStrategy = DuplicatesStrategy.EXCLUDE
+
+    manifest {
+        attributes(
+                'Main-Class': 'com.griddynamics.phoenix.ServerApp'
+        )
+    }
+    from {
+        configurations.runtimeClasspath.collect { it.isDirectory() ? it : zipTree(it) }
+    }
+}
+
+test {
+    maxParallelForks = 1
+}
+
+sourceSets {
+    test {
+        resources {
+            srcDirs "src/test/resources"
+        }
+    }
+}
+
+processTestResources {
+    duplicatesStrategy = DuplicatesStrategy.INCLUDE
+}
+
+import com.bmuschko.gradle.docker.tasks.image.DockerBuildImage
+import com.bmuschko.gradle.docker.tasks.image.DockerPushImage
+
+version = "${majorVersion}.${minorVerison}"
+def dockerImageUrl = "${dockerRepo}/${project.name}:${version}"
+
+tasks.register('buildImage', DockerBuildImage) {
+    dependsOn test
+    dependsOn shadowJar
+
+    tasks.findByName('shadowJar').mustRunAfter 'test'
+
+    inputDir = project.projectDir
+    images = [dockerImageUrl]
+
+    buildArgs = [
+            'CONF': "${project.property('profile')}.conf",
+            'PORT': System.getenv('SERVICE_PORT') != null ? System.getenv('SERVICE_PORT') : '8080']
+}
+
+
+tasks.register('pushImage', DockerPushImage) {
+    dependsOn buildImage
+    registryCredentials {
+        username = project.property('username')
+        password = project.property('password')
+    }
+    images = [dockerImageUrl]
+}
+
+tasks.register('triggerCI') {
+    println("Triggering flow: Test -> Fat Jar -> Create Docker Image -> Push Docker Image")
+    dependsOn pushImage
+}
+
+dependencies {
+    compileOnly "org.scala-lang:scala-library:$scala_version"
+    implementation("com.github.pureconfig:pureconfig$scala_suffix:$pure_config_version")
+    implementation("com.github.pureconfig:pureconfig-cats-effect$scala_suffix:$pure_config_version")
+    implementation("org.typelevel:cats-effect$scala_suffix:$cats_effect_version")
+    implementation("org.http4s:http4s-blaze-server$scala_suffix:$http4s_blaze_version")
+    implementation("org.http4s:http4s-blaze-client$scala_suffix:$http4s_blaze_version")
+    implementation("org.http4s:http4s-dsl$scala_suffix:$http4s_version")
+    implementation("org.http4s:http4s-circe$scala_suffix:$http4s_version")
+    implementation("ch.qos.logback:logback-classic:$loggback_verion")
+    implementation("io.circe:circe-generic$scala_suffix:$circle_version")
+    implementation("io.circe:circe-generic-extras$scala_suffix:$circle_version")
+    implementation("io.circe:circe-literal$scala_suffix:$circle_version")
+    implementation("io.circe:circe-parser$scala_suffix:$circle_version")
+    implementation("com.olegpy:meow-mtl-core$scala_suffix:$mtl_version")
+    implementation("com.olegpy:meow-mtl-effects$scala_suffix:$mtl_version")
+    implementation("com.olegpy:meow-mtl-monix$scala_suffix:$mtl_version")
+    implementation("com.lightbend.akka:akka-stream-alpakka-sqs$scala_suffix:$akka_stream_alpakka_sqs_version")
+    implementation("com.typesafe.akka:akka-stream$scala_suffix:$akka_version")
+    implementation("com.typesafe.akka:akka-http$scala_suffix:$akka_http_version")
+    implementation("org.apache.velocity:velocity-engine-core:$apache_velocity_version")
+    implementation("software.amazon.awssdk:aws-sdk-java:$aws_sdk_java_version")
+
+    testImplementation("org.scalatest:scalatest$scala_suffix:$scala_test_version")
+    testImplementation("org.scalamock:scalamock$scala_suffix:$scala_mock_version")
+    testImplementation("com.vladsch.flexmark:flexmark-all:0.64.8")
+    testImplementation("org.typelevel:cats-effect-testing-scalatest$scala_suffix:$cats_effect_testing_scalatest")
+    testImplementation("org.elasticmq:elasticmq-rest-sqs$scala_suffix:1.4.4") {
+        exclude group: 'com.typesafe.akka', module: 'akka-slf4j_2.13'
+        exclude group: 'com.typesafe.akka', module: 'akka-http-spray-json_2.13'
+    }
+    testImplementation("io.findify:s3mock$scala_suffix:0.2.6")
+    testImplementation("com.typesafe.akka:akka-slf4j$scala_suffix:$akka_version")
+    testImplementation("com.typesafe.akka:akka-http-spray-json$scala_suffix:$akka_http_version")
+    testImplementation("org.wiremock:wiremock:3.2.0")
+    // library to delete local temporary files that simulate S3 bucket
+    testImplementation("commons-io:commons-io:2.14.0")
+}
